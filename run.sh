@@ -120,7 +120,8 @@ handle_push_event(){
 	}
 
 	MERGE_FROM="$(jq -r '.ref//empty'<<<"$REQUEST")" && MERGE_FROM="${MERGE_FROM#refs/heads/}"
-	[ ! -z "$GIT_AUTO_MERGE" ] && match_patterns "$MERGE_FROM" $GIT_AUTO_MERGE || return 0
+	[ ! -z "$GIT_AUTO_MERGE" ] && match_patterns "$MERGE_FROM" $GIT_AUTO_MERGE && \
+		[ "$(jq -r '.before//empty'<<<"$REQUEST")" == "0000000000000000000000000000000000000000" ] || return 0
 
 	local PROJECT_ID="$(jq -r '.project_id//empty'<<<"$REQUEST")" \
 		MERGE_TO="${GIT_AUTO_MERGE_TO:-$(jq -r '.project.default_branch//"master"'<<<"$REQUEST")}"
