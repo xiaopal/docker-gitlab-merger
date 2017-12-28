@@ -78,6 +78,10 @@ handle_webhook_request(){
 		return 1
 		;;
 	esac
+	[ ! -z "$GITLAB_WEBHOOK_DEBUG" ] && (
+		echo "Gitlab Webhook: '$EVENT_ACTION' '${URI#/}' '$(jq -r '.args//empty'<<<"$RAW_REQUEST")' " 
+		jq -r '.body//empty'<<<"$RAW_REQUEST"
+	) >&2
 	jq -r '.body//empty'<<<"$RAW_REQUEST" | \
 		"$EVENT_ACTION" "${URI#/}" "$(jq -r '.args//empty'<<<"$RAW_REQUEST")"
 }
