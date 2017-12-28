@@ -148,16 +148,16 @@ handle_mr_event(){
 		return 1
 	}
 	[ ! -z "$GIT_AUTO_TAG" ] || return 0
-	GIT_AUTO_TAG_TO="${GIT_AUTO_TAG_TO:-$(jq -r '.merge_request.target.default_branch//"master"'<<<"$REQUEST")}"
-	[ "$(jq -r '.merge_request.source.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
-	[ "$(jq -r '.merge_request.target.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
-	[ "$(jq -r '.merge_request.state//empty'<<<"$REQUEST")" == "merged" ] || return 0
+	GIT_AUTO_TAG_TO="${GIT_AUTO_TAG_TO:-$(jq -r '.object_attributes.target.default_branch//"master"'<<<"$REQUEST")}"
+	[ "$(jq -r '.object_attributes.source.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
+	[ "$(jq -r '.object_attributes.target.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
+	[ "$(jq -r '.object_attributes.action//empty'<<<"$REQUEST")" == "merge" ] || return 0
 
-	local TAG_FROM="$(jq -r '.merge_request.source_branch//empty'<<<"$REQUEST")" \
-		TAG_TO="$(jq -r '.merge_request.target_branch//empty'<<<"$REQUEST")"
+	local TAG_FROM="$(jq -r '.object_attributes.source_branch//empty'<<<"$REQUEST")" \
+		TAG_TO="$(jq -r '.object_attributes.target_branch//empty'<<<"$REQUEST")"
 	[ "$TAG_TO" == "$GIT_AUTO_TAG_TO" ] && match_patterns "$MERGE_FROM" $GIT_AUTO_MERGE || return 0
 
-	local PROJECT_ID="$(jq -r '.merge_request.target_project_id//empty'<<<"$REQUEST")" \
+	local PROJECT_ID="$(jq -r '.object_attributes.target_project_id//empty'<<<"$REQUEST")" \
 		TAG_NAME="${TAG_FROM##*/}"
 	[ ! -z "$(gitlab_api GET "/api/v4/projects/$PROJECT_ID/repository/tags/$TAG_NAME" | jq -r ".name//empty")" ] || {
 		local CREATE_TAG="$(uri_with_params \
