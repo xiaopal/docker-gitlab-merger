@@ -92,10 +92,14 @@ gitlab_api() {
 	[ ! -z "$GITLAB_API_DEBUG" ] && echo "Gitlab API: $METHOD $URI" >&2
 }
 
-match_patterns(){
-	local TEXT="$1" PATTERN && shift
-	while PATTERN="$1" && shift; do
-		[ ! -z "$PATTERN" ] && [[ "$TEXT" == $PATTERN ]] && return 0
+match_merge_patterns(){
+	# Eg. release/*:master hotfix/*:master feature/*:develop
+	local TEXT="$1" DEFAULT_DEST="$2" PATTERN DEST && shift && shift
+	while IFS=':' read -r PATTERN DEST<<<"$1" && shift; do
+		[ ! -z "$PATTERN" ] && [[ "$TEXT" == $PATTERN ]] && {
+			echo "${DEST:-$DEFAULT_DEST}"
+			return 0
+		}
 	done
 	return 1
 }
@@ -109,7 +113,7 @@ uri_with_params(){
 }
 
 handle_push_event(){
-	local REQUEST="$(jq -c .)" ENDPOINT="$1" MERGE_FROM
+	local REQUEST="$(jq -c .)" ENDPOINT="$1"
 	[ ! -z "$REQUEST" ] || {
 		echo "[ $(date -R) ] ERROR - Request body required" >&2
 		return 1
@@ -119,12 +123,15 @@ handle_push_event(){
 		return 1
 	}
 
+	local MERGE_FROM MERGE_TO MERGE_TO_DEFAULT
 	MERGE_FROM="$(jq -r '.ref//empty'<<<"$REQUEST")" && MERGE_FROM="${MERGE_FROM#refs/heads/}"
-	[ ! -z "$GIT_AUTO_MERGE" ] && match_patterns "$MERGE_FROM" $GIT_AUTO_MERGE && \
-		[ "$(jq -r '.before//empty'<<<"$REQUEST")" == "0000000000000000000000000000000000000000" ] || return 0
+	[ ! -z "$GIT_AUTO_MERGE" ] && \
+		[ "$(jq -r '.before//empty'<<<"$REQUEST")" == "0000000000000000000000000000000000000000" ] && \
+		MERGE_TO_DEFAULT="$(jq -r '.project.default_branch//"master"'<<<"$REQUEST")" && \
+		MERGE_TO="$(match_merge_patterns "$MERGE_FROM" "$MERGE_TO_DEFAULT" $GIT_AUTO_MERGE)" && \
+		[ ! -z "$MERGE_TO" ] || return 0
 
-	local PROJECT_ID="$(jq -r '.project_id//empty'<<<"$REQUEST")" \
-		MERGE_TO="${GIT_AUTO_MERGE_TO:-$(jq -r '.project.default_branch//"master"'<<<"$REQUEST")}"
+	local PROJECT_ID="$(jq -r '.project_id//empty'<<<"$REQUEST")"
 	local FOUND_MR="$(export MERGE_FROM MERGE_TO
 		gitlab_api GET "/api/v4/projects/$PROJECT_ID/merge_requests?state=opened" | \
 		jq '.[]|select(.target_branch==env.MERGE_TO and .source_branch==env.MERGE_FROM)|.id//empty')"
@@ -133,7 +140,7 @@ handle_push_event(){
 			"/api/v4/projects/$PROJECT_ID/merge_requests" \
 			source_branch "$MERGE_FROM" \
 			target_branch "$MERGE_TO" \
-			title "WIP:$MERGE_FROM" \
+			title "WIP: $MERGE_FROM" \
 			remove_source_branch true )"
 		local MR="$(gitlab_api POST "$CREATE_MR" | jq -r '.title//.id')"
 		echo "[ $(date -R) ] INFO - Merge Request created: $MR"
@@ -147,18 +154,18 @@ handle_mr_event(){
 		echo "[ $(date -R) ] ERROR - Request body required" >&2
 		return 1
 	}
-	[ ! -z "$GIT_AUTO_TAG" ] || return 0
-	GIT_AUTO_TAG_TO="${GIT_AUTO_TAG_TO:-$(jq -r '.object_attributes.target.default_branch//"master"'<<<"$REQUEST")}"
-	[ "$(jq -r '.object_attributes.source.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
-	[ "$(jq -r '.object_attributes.target.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] || return 0
-	[ "$(jq -r '.object_attributes.action//empty'<<<"$REQUEST")" == "merge" ] || return 0
 
-	local TAG_FROM="$(jq -r '.object_attributes.source_branch//empty'<<<"$REQUEST")" \
-		TAG_TO="$(jq -r '.object_attributes.target_branch//empty'<<<"$REQUEST")"
-	[ "$TAG_TO" == "$GIT_AUTO_TAG_TO" ] && match_patterns "$MERGE_FROM" $GIT_AUTO_MERGE || return 0
+	local TAG_FROM TAG_TO TAG_TO_TARGET TAG_NAME
+	[ ! -z "$GIT_AUTO_TAG" ] && \
+		[ "$(jq -r '.object_attributes.target.path_with_namespace//empty'<<<"$REQUEST")" == "$ENDPOINT" ] && \
+		[ "$(jq -r '.object_attributes.action//empty'<<<"$REQUEST")" == "merge" ] && \
+		TAG_FROM="$(jq -r '.object_attributes.source_branch//empty'<<<"$REQUEST")" && \
+		TAG_TO_TARGET="$(jq -r '.object_attributes.target_branch//empty'<<<"$REQUEST")" && \
+		TAG_TO="$(match_merge_patterns "$TAG_FROM" "$TAG_TO_TARGET" $GIT_AUTO_TAG)" && \
+		TAG_NAME="${TAG_FROM##*/}" && [ ! -z "$TAG_NAME" ] && \
+		[ ! -z "$TAG_TO" ] && [ "$TAG_TO" == "$TAG_TO_TARGET" ] || return 0
 
-	local PROJECT_ID="$(jq -r '.object_attributes.target_project_id//empty'<<<"$REQUEST")" \
-		TAG_NAME="${TAG_FROM##*/}"
+	local PROJECT_ID="$(jq -r '.object_attributes.target_project_id//empty'<<<"$REQUEST")"
 	[ ! -z "$(gitlab_api GET "/api/v4/projects/$PROJECT_ID/repository/tags/$TAG_NAME" | jq -r ".name//empty")" ] || {
 		local CREATE_TAG="$(uri_with_params \
 			"/api/v4/projects/$PROJECT_ID/repository/tags" \
