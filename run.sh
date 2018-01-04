@@ -181,14 +181,13 @@ handle_mr_event(){
 	return 0
 }
 
-parse_flag(){
-	[[ "${1,,}" =~ ^(y|yes|true|on|1)$ ]] && echo 'Y'
-}
-
 perform_put_file(){
 	local FILE_BASE64="$(base64 -d | base64 | tr -d '\n')" PROJECT="$1" QUERY="$2" NAME VALUE \
 		FILE_PATH BRANCH BRANCH_FROM COMMIT_MESSAGE \
-		CREATE_FILE='Y' UPDATE_FILE='' DELETE_FILE=''
+		CREATE_FILE='Y' UPDATE_FILE='' DELETE_FILE='' LAZY='Y'
+	parse_flag(){
+		[[ "${1,,}" =~ ^(y|yes|true|on|1)$ ]] && echo 'Y'
+	}		
 	[ ! -z "$QUERY" ] && while IFS='=' read -r -d '&' NAME VALUE; do
 		case "$NAME" in
 		"path")
@@ -209,6 +208,9 @@ perform_put_file(){
 		"delete"|"remove")
 			DELETE_FILE="$(parse_flag "$VALUE")"
 			;;
+		"lazy")
+			LAZY="$(parse_flag "$VALUE")"
+			;;
 		"commit")
 			COMMIT_MESSAGE="$VALUE"
 			;;
@@ -218,28 +220,32 @@ perform_put_file(){
 		echo "[ $(date -R) ] ERROR - path and branch required" >&2
 		return 1
 	}
-	[ ! -z "$(gitlab_api GET "/api/v4/projects/${PROJECT/\//%2F}/repository/branches/${BRANCH/\//%2F}" | jq -r ".name//empty")" ] || {
+	[ ! -z "$(gitlab_api GET "/api/v4/projects/${PROJECT/\//%2F}/repository/branches/${BRANCH/\//%2F}" | jq -r ".name//empty")" ] \
+		&& BRANCH_FROM="$BRANCH" || {
 		[ ! -z "$BRANCH_FROM" ] || {
 			echo "[ $(date -R) ] ERROR - Branch '$BRANCH' not found" >&2
 			return 1
 		}
-		local CREATE_BRANCH="$(uri_with_params \
-			"/api/v4/projects/${PROJECT/\//%2F}/repository/branches" \
-			branch "$BRANCH" \
-			ref "$BRANCH_FROM" )"
-		[ ! -z "$(gitlab_api POST "$CREATE_BRANCH" | jq -r '.name//empty')" ] || {
-			echo "[ $(date -R) ] ERROR - Failed to create branch: $BRANCH" >&2
-			return 1
+		[ ! -z "$LAZY" ] || {
+			local CREATE_BRANCH="$(uri_with_params \
+				"/api/v4/projects/${PROJECT/\//%2F}/repository/branches" \
+				branch "$BRANCH" \
+				ref "$BRANCH_FROM" )"
+			[ ! -z "$(gitlab_api POST "$CREATE_BRANCH" | jq -r '.name//empty')" ] || {
+				echo "[ $(date -R) ] ERROR - Failed to create branch: $BRANCH" >&2
+				return 1
+			}
+			echo "[ $(date -R) ] INFO - Branch created: $BRANCH" >&2
+			BRANCH_FROM="$BRANCH"
 		}
-		echo "[ $(date -R) ] INFO - Branch created: $BRANCH" >&2
 	}
 
 	local API_FILE="/api/v4/projects/${PROJECT/\//%2F}/repository/files/${FILE_PATH/\//%2F}"
-	local FILE_DETAIL="$(gitlab_api GET "$(uri_with_params "$API_FILE" ref "$BRANCH")")"
+	local FILE_DETAIL="$(gitlab_api GET "$(uri_with_params "$API_FILE" ref "$BRANCH_FROM")")"
 	[ ! -z "$DELETE_FILE" ] && {
 		[ ! -z "$(jq -r '.file_name//empty'<<<"$FILE_DETAIL")" ] || return 0
 		gitlab_api DELETE "$(uri_with_params "$API_FILE" \
-			branch "$BRANCH" \
+			branch "$BRANCH" start_branch "$BRANCH_FROM" \
 			commit_message "${COMMIT_MESSAGE:-Delete $FILE_PATH}" \
 			)"
 		echo "[ $(date -R) ] INFO - File deleted: $FILE_PATH @$BRANCH" >&2				
@@ -249,7 +255,7 @@ perform_put_file(){
 	gitlab_upload_file(){
 		local METHOD="$1" \
 			PUT_FILE="$(uri_with_params "$API_FILE" \
-				branch "$BRANCH" \
+				branch "$BRANCH" start_branch "$BRANCH_FROM" \
 				commit_message "${COMMIT_MESSAGE:-Upload $FILE_PATH}" \
 				encoding "base64" )" \
 			PUT_FILE_DATA="$(mktemp)" && echo "content=${FILE_BASE64//+/%2B}" >"$PUT_FILE_DATA"
