@@ -1,0 +1,13 @@
+---
+- id: merger
+  execute-command: /merger.sh
+  include-command-output-in-response: yes
+  include-command-output-in-response-on-error: yes
+  pass-environment-to-command:
+    - {envname: MERGER_URI, source: header, name: X-Merger-Uri}
+    - {envname: MERGER_ARGS, source: header, name: X-Merger-Args}
+    - {envname: MERGER_TOKEN, source: header, name: X-Gitlab-Token}
+    - {envname: MERGER_EVENT, source: header, name: X-Gitlab-Event}
+  pass-file-to-command:
+    #- {envname: MERGER_HEADERS, source: entire-headers}
+    - {envname: MERGER_PAYLOAD, source: entire-payload}
